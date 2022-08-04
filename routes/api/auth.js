@@ -5,9 +5,13 @@ const router = express.Router();
 const Joi = require("joi");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const upload = require("../../multer/multerConfig");
 const { authorize } = require("../../middlewares");
-
+const fs = require("fs").promises;
+const path = require("path");
 require("dotenv").config();
+const gravatar = require("gravatar");
+const Jimp = require("jimp");
 
 const { SECRET_KEY } = process.env;
 const userSchema = Joi.object({
@@ -23,17 +27,53 @@ router.post("/register", async (req, res, next) => {
 
     if (error) throw createError(400, error.message);
     const { email, password } = req.body;
+    const avatar = gravatar.url(email);
     const user = await User.findOne({ email });
 
     if (user) throw createError(409, "This email already exists");
     const hashedPassword = await bcrypt.hash(password, 10);
-    const result = await User.create({ email, password: hashedPassword });
+    const result = await User.create({
+      email,
+      password: hashedPassword,
+      avatar,
+    });
 
     res.status(201).json(result);
   } catch (error) {
     next(error);
   }
 });
+router.patch(
+  "/avatar",
+  authorize,
+  upload.single("image"),
+  async (req, res, next) => {
+    try {
+      const { _id } = req.user;
+      const avatarPath = path.join(__dirname, "..", "..", "public", "avatars");
+      const { path: tempDir, originalname } = req.file;
+      const photo = await Jimp.read(tempDir);
+      await photo.resize(250, 250).write(tempDir);
+
+      const [extension] = originalname.split(".").reverse();
+      const newName = `${_id}.${extension}`;
+      const uploadDir = path.join(avatarPath, newName);
+      const avatarURL = path.join("avatars", newName);
+      await fs.rename(tempDir, uploadDir);
+      const updatedUser = await User.findByIdAndUpdate(
+        _id,
+        { avatar: avatarURL },
+        {
+          new: true,
+        }
+      );
+      res.json(updatedUser);
+    } catch (error) {
+      await fs.unlink(req.file.path);
+      next(error);
+    }
+  }
+);
 router.post("/login", async (req, res, next) => {
   try {
     const { error } = userSchema.validate(req.body);
